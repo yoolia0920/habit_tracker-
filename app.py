@@ -7,6 +7,7 @@ import requests
 import streamlit as st
 import altair as alt
 from openai import OpenAI
+from streamlit_calendar import calendar
 
 # =========================
 # Page Config
@@ -67,6 +68,35 @@ def _normalize_habit_records(habit_keys: List[str]) -> None:
                 updated = True
         if updated:
             record["habits"] = habits
+
+
+def _achievement_color(achievement_pct: int) -> str:
+    if achievement_pct >= 80:
+        return "#2ecc71"
+    if achievement_pct >= 50:
+        return "#f1c40f"
+    return "#e74c3c"
+
+
+def _build_calendar_events(records: Dict[str, Dict[str, Any]], habit_keys: List[str]) -> List[Dict[str, Any]]:
+    events: List[Dict[str, Any]] = []
+    total = len(habit_keys)
+    for date_key, rec in records.items():
+        habits = rec.get("habits") or {k: False for k in habit_keys}
+        achieved_count = sum(1 for v in habits.values() if v)
+        achievement_pct = int(round((achieved_count / total) * 100)) if total else 0
+        color = _achievement_color(achievement_pct)
+        events.append(
+            {
+                "title": f"{achievement_pct}%",
+                "start": date_key,
+                "allDay": True,
+                "backgroundColor": color,
+                "borderColor": color,
+                "textColor": "#111111",
+            }
+        )
+    return events
 
 
 HABITS = _get_habits()
@@ -298,16 +328,55 @@ _normalize_habit_records(HABIT_KEYS)
 
 today = dt.date.today()
 today_key = str(today)
+if "selected_date" not in st.session_state:
+    st.session_state.selected_date = today_key
+
+selected_key = st.session_state.selected_date
+selected_date_obj = dt.date.fromisoformat(selected_key)
+
+# =========================
+# Calendar
+# =========================
+st.subheader("🗓️ 기록 캘린더")
+calendar_events = _build_calendar_events(st.session_state.records, HABIT_KEYS)
+calendar_options = {
+    "initialView": "dayGridMonth",
+    "locale": "ko",
+    "height": 520,
+    "headerToolbar": {"left": "prev,next today", "center": "title", "right": "dayGridMonth"},
+    "dayMaxEvents": 2,
+}
+
+calendar_state = calendar(events=calendar_events, options=calendar_options)
+selected_date_clicked = None
+if calendar_state.get("dateClick"):
+    selected_date_clicked = calendar_state["dateClick"]["date"]
+elif calendar_state.get("eventClick"):
+    selected_date_clicked = calendar_state["eventClick"]["event"]["start"]
+
+if selected_date_clicked:
+    st.session_state.selected_date = selected_date_clicked
+    if selected_date_clicked not in st.session_state.records:
+        st.session_state.records[selected_date_clicked] = {
+            "date": selected_date_clicked,
+            "habits": {k: False for k in HABIT_KEYS},
+            "mood": 5,
+            "city": "Seoul",
+            "coach_style": "따뜻한 멘토",
+        }
+    st.rerun()
+
+st.caption("달성률 색상: 🟢 80% 이상 · 🟡 50~79% · 🔴 49% 이하")
 
 # =========================
 # Main: Check-in UI
 # =========================
-st.subheader("✅ 오늘 체크인")
+st.subheader(f"✅ 체크인 ({selected_key})")
 
 left, right = st.columns([1.1, 0.9], vertical_alignment="top")
 
 # 오늘 레코드 로드
-current = st.session_state.records.get(today_key, {})
+current = st.session_state.records.get(selected_key, {})
 current_habits = (current.get("habits") or {k: False for k in HABIT_KEYS}).copy()
 current_mood = int(current.get("mood") or 5)
 current_city = current.get("city") or "Seoul"
@@ -370,18 +439,18 @@ with left:
     save_btn = st.button("💾 오늘 기록 저장", use_container_width=True)
 
     if save_btn:
-        st.session_state.records[today_key] = {
-            "date": today_key,
+        st.session_state.records[selected_key] = {
+            "date": selected_key,
             "habits": updated_habits,
             "mood": mood,
             "city": city,
             "coach_style": coach_style,
         }
-        st.success("오늘 체크인이 저장됐어요!")
+        st.success("체크인이 저장됐어요!")
 
 with right:
     # 저장값이 있으면 저장값, 없으면 현재 UI값을 사용
-    used = st.session_state.records.get(today_key, {})
+    used = st.session_state.records.get(selected_key, {})
     used_habits = used.get("habits") or updated_habits
     used_mood = int(used.get("mood") or mood)
 
@@ -398,7 +467,7 @@ with right:
     st.markdown("---")
 
     st.markdown("**📊 최근 7일 달성률**")
-    last7 = [today - dt.timedelta(days=i) for i in range(6, -1, -1)]
+    last7 = [selected_date_obj - dt.timedelta(days=i) for i in range(6, -1, -1)]
     rows: List[Dict[str, Any]] = []
     for d in last7:
         k = str(d)
@@ -531,15 +600,15 @@ if gen_btn:
 
     # ✅ 버튼 누른 순간의 최신 UI값을 레코드에 '자동 반영'
     # (사용자가 저장 버튼을 안 눌렀어도, 생성 버튼으로 바로 리포트 만들 수 있게)
-    st.session_state.records[today_key] = {
-        "date": today_key,
+    st.session_state.records[selected_key] = {
+        "date": selected_key,
         "habits": updated_habits,
         "mood": mood,
         "city": city,
         "coach_style": coach_style,
     }
 
-    rec = st.session_state.records[today_key]
+    rec = st.session_state.records[selected_key]
     habits_now = rec["habits"]
     mood_now = int(rec["mood"])
     city_now = rec["city"]
@@ -614,7 +683,7 @@ else:
 # Share text
 st.markdown("#### 📌 공유용 텍스트")
 
-rec_today = st.session_state.records.get(today_key, {})
+rec_today = st.session_state.records.get(selected_key, {})
 hab_today = rec_today.get("habits") or {k: False for k in HABIT_KEYS}
 ach_list = [k for k, v in hab_today.items() if v]
 miss_list = [k for k, v in hab_today.items() if not v]
@@ -627,7 +696,7 @@ if weather:
     weather_line = f"{weather.get('desc')}, {weather.get('temp')}°C"
 
 share = f"""[AI 습관 트래커 - 오늘 체크인]
-- 날짜: {today_key}
+- 날짜: {selected_key}
 - 도시: {city_today}
 - 코치 스타일: {style_today}
 - 달성: {", ".join(ach_list) if ach_list else "없음"}
