@@ -34,6 +34,8 @@ def _init_state():
         st.session_state.last_dog = None
     if "last_error" not in st.session_state:
         st.session_state.last_error = None
+    if "custom_habits" not in st.session_state:
+        st.session_state.custom_habits = []
 
 
 _init_state()
@@ -41,13 +43,33 @@ _init_state()
 # =========================
 # Constants
 # =========================
-HABITS = [
+DEFAULT_HABITS = [
     ("기상 미션", "⏰"),
     ("물 마시기", "💧"),
     ("공부/독서", "📚"),
     ("운동하기", "🏃‍♀️"),
     ("수면", "😴"),
 ]
+DEFAULT_HABIT_KEYS = [h[0] for h in DEFAULT_HABITS]
+
+
+def _get_habits() -> List[Tuple[str, str]]:
+    return DEFAULT_HABITS + st.session_state.custom_habits
+
+
+def _normalize_habit_records(habit_keys: List[str]) -> None:
+    for record in st.session_state.records.values():
+        habits = record.get("habits") or {}
+        updated = False
+        for key in habit_keys:
+            if key not in habits:
+                habits[key] = False
+                updated = True
+        if updated:
+            record["habits"] = habits
+
+
+HABITS = _get_habits()
 HABIT_KEYS = [h[0] for h in HABITS]
 
 CITIES = ["Seoul", "Busan", "Incheon", "Daegu", "Daejeon", "Gwangju", "Ulsan", "Suwon", "Jeju", "Sejong"]
@@ -272,6 +294,7 @@ def _seed_demo_data_if_needed() -> None:
 
 
 _seed_demo_data_if_needed()
+_normalize_habit_records(HABIT_KEYS)
 
 today = dt.date.today()
 today_key = str(today)
@@ -291,6 +314,26 @@ current_city = current.get("city") or "Seoul"
 current_style = current.get("coach_style") or "따뜻한 멘토"
 
 with left:
+    st.markdown("**습관 추가**")
+    habit_input_cols = st.columns([0.75, 0.25])
+    with habit_input_cols[0]:
+        new_habit = st.text_input("습관 추가", placeholder="예: 영어 단어 10개", label_visibility="collapsed")
+    with habit_input_cols[1]:
+        add_habit = st.button("추가", use_container_width=True)
+
+    if add_habit:
+        habit_name = new_habit.strip()
+        if not habit_name:
+            st.warning("추가할 습관 이름을 입력해주세요.")
+        elif habit_name in HABIT_KEYS:
+            st.info("이미 등록된 습관이에요.")
+        else:
+            st.session_state.custom_habits.append((habit_name, "✨"))
+            updated_keys = DEFAULT_HABIT_KEYS + [h[0] for h in st.session_state.custom_habits]
+            _normalize_habit_records(updated_keys)
+            st.success(f"'{habit_name}' 습관이 추가됐어요!")
+            st.rerun()
+
     st.markdown("**습관 체크(2열)**")
     c1, c2 = st.columns(2)
     updated_habits: Dict[str, bool] = {}
