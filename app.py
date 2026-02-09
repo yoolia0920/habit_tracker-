@@ -39,6 +39,8 @@ def _init_state():
         st.session_state.last_error = None
     if "last_errors" not in st.session_state:
         st.session_state.last_errors = {}
+    if "last_selected_sources" not in st.session_state:
+        st.session_state.last_selected_sources = []
     if "custom_habits" not in st.session_state:
         st.session_state.custom_habits = []
 
