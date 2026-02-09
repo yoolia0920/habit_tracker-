@@ -40,8 +40,6 @@ def _init_state():
         st.session_state.last_error = None
     if "last_errors" not in st.session_state:
         st.session_state.last_errors = {}
-    if "last_selected_sources" not in st.session_state:
-        st.session_state.last_selected_sources = []
     if "custom_habits" not in st.session_state:
         st.session_state.custom_habits = []
 
@@ -245,16 +243,9 @@ def get_quotable_quote() -> Tuple[Optional[Dict[str, str]], Optional[str]]:
     """
     url = "https://api.quotable.io/random"
     try:
-        r = requests.get(
-            url,
-            timeout=10,
-            headers={"Accept": "application/json", "User-Agent": "habit-tracker/1.0"},
-            verify=certifi.where(),
-        )
+        r = requests.get(url, timeout=10)
         if r.status_code == 429:
             return None, "Quotable 호출 제한(429): 잠시 후 다시 시도해줘요."
-        if r.status_code >= 500:
-            return None, f"Quotable 서버 오류({r.status_code})가 발생했어요."
         r.raise_for_status()
         data = r.json()
         content = data.get("content")
@@ -263,8 +254,6 @@ def get_quotable_quote() -> Tuple[Optional[Dict[str, str]], Optional[str]]:
         return {"content": content, "author": data.get("author") or "알 수 없음"}, None
     except requests.Timeout:
         return None, "Quotable 요청 시간이 초과됐어요(timeout=10)."
-    except requests.exceptions.SSLError:
-        return None, "Quotable SSL 인증 오류가 발생했어요. 네트워크/인증서 상태를 확인해줘요."
     except Exception as e:
         return None, f"Quotable 오류: {type(e).__name__}"
 
@@ -277,16 +266,9 @@ def get_advice_tip() -> Tuple[Optional[Dict[str, str]], Optional[str]]:
     """
     url = "https://api.adviceslip.com/advice"
     try:
-        r = requests.get(
-            url,
-            timeout=10,
-            headers={"Accept": "application/json", "User-Agent": "habit-tracker/1.0"},
-            verify=certifi.where(),
-        )
+        r = requests.get(url, timeout=10, headers={"Accept": "application/json"})
         if r.status_code == 429:
             return None, "Advice Slip 호출 제한(429): 잠시 후 다시 시도해줘요."
-        if r.status_code >= 500:
-            return None, f"Advice Slip 서버 오류({r.status_code})가 발생했어요."
         r.raise_for_status()
         data = r.json()
         slip = data.get("slip") or {}
@@ -296,8 +278,6 @@ def get_advice_tip() -> Tuple[Optional[Dict[str, str]], Optional[str]]:
         return {"advice": advice}, None
     except requests.Timeout:
         return None, "Advice Slip 요청 시간이 초과됐어요(timeout=10)."
-    except requests.exceptions.SSLError:
-        return None, "Advice Slip SSL 인증 오류가 발생했어요. 네트워크/인증서 상태를 확인해줘요."
     except Exception as e:
         return None, f"Advice Slip 오류: {type(e).__name__}"
 
@@ -715,7 +695,6 @@ gen_btn = st.button("🚀 컨디션 리포트 생성", type="primary", use_conta
 if gen_btn:
     st.session_state.last_error = None
     st.session_state.last_errors = {}
-    st.session_state.last_selected_sources = []
 
     # ✅ 버튼 누른 순간의 최신 UI값을 레코드에 '자동 반영'
     # (사용자가 저장 버튼을 안 눌렀어도, 생성 버튼으로 바로 리포트 만들 수 있게)
@@ -734,7 +713,6 @@ if gen_btn:
     city_now = rec["city"]
     style_now = rec["coach_style"]
     api_sources_now = rec.get("api_sources") or []
-    st.session_state.last_selected_sources = api_sources_now
 
     with st.spinner("날씨/강아지 데이터를 불러오고 리포트를 생성하는 중..."):
         weather, weather_err = get_weather(city_now, owm_key)
@@ -787,7 +765,6 @@ dog_info = st.session_state.last_dog or {}
 report = st.session_state.last_report
 last_error = st.session_state.last_error
 extras_info = st.session_state.last_extras or {}
-selected_sources = st.session_state.last_selected_sources or []
 
 last_errors = st.session_state.last_errors or {}
 if last_errors:
@@ -834,8 +811,6 @@ with extra_col1:
     quote = extras_info.get("quote")
     if quote:
         st.info(f"“{quote.get('content')}”\n\n- {quote.get('author') or '알 수 없음'}")
-    elif "quote" not in selected_sources:
-        st.caption("선택하지 않은 API예요.")
     else:
         st.caption("선택하지 않았거나 데이터를 가져오지 못했어요.")
 
@@ -844,8 +819,6 @@ with extra_col2:
     tip = extras_info.get("tip")
     if tip:
         st.info(tip.get("advice") or "정보 없음")
-    elif "tip" not in selected_sources:
-        st.caption("선택하지 않은 API예요.")
     else:
         st.caption("선택하지 않았거나 데이터를 가져오지 못했어요.")
 
