@@ -33,8 +33,14 @@ def _init_state():
         st.session_state.last_weather = None
     if "last_dog" not in st.session_state:
         st.session_state.last_dog = None
+    if "last_extras" not in st.session_state:
+        st.session_state.last_extras = {}
     if "last_error" not in st.session_state:
         st.session_state.last_error = None
+    if "last_errors" not in st.session_state:
+        st.session_state.last_errors = {}
+    if "last_selected_sources" not in st.session_state:
+        st.session_state.last_selected_sources = []
     if "custom_habits" not in st.session_state:
         st.session_state.custom_habits = []
 
@@ -104,6 +110,12 @@ HABIT_KEYS = [h[0] for h in HABITS]
 
 CITIES = ["Seoul", "Busan", "Incheon", "Daegu", "Daejeon", "Gwangju", "Ulsan", "Suwon", "Jeju", "Sejong"]
 COACH_STYLES = ["스파르타 코치", "따뜻한 멘토", "게임 마스터"]
+API_SOURCES = [
+    ("quote", "명언(Quotable)"),
+    ("tip", "오늘의 팁(Advice Slip)"),
+]
+API_SOURCE_LABELS = {key: label for key, label in API_SOURCES}
+DEFAULT_API_SOURCE_KEYS = [key for key, _ in API_SOURCES]
 
 STYLE_SYSTEM_PROMPTS = {
     "스파르타 코치": (
@@ -224,6 +236,65 @@ def get_dog_image() -> Tuple[Optional[Tuple[str, Optional[str]]], Optional[str]]
         return None, f"Dog CEO 오류: {type(e).__name__}"
 
 
+def get_quotable_quote() -> Tuple[Optional[Dict[str, str]], Optional[str]]:
+    """
+    Quotable 명언
+    - 실패 시 (None, error_message)
+    - timeout=10
+    """
+    url = "https://api.quotable.io/random"
+    try:
+        r = requests.get(
+            url,
+            timeout=10,
+            headers={"Accept": "application/json", "User-Agent": "habit-tracker/1.0"},
+        )
+        if r.status_code == 429:
+            return None, "Quotable 호출 제한(429): 잠시 후 다시 시도해줘요."
+        if r.status_code >= 500:
+            return None, f"Quotable 서버 오류({r.status_code})가 발생했어요."
+        r.raise_for_status()
+        data = r.json()
+        content = data.get("content")
+        if not content:
+            return None, "Quotable 응답에 명언이 없어요."
+        return {"content": content, "author": data.get("author") or "알 수 없음"}, None
+    except requests.Timeout:
+        return None, "Quotable 요청 시간이 초과됐어요(timeout=10)."
+    except Exception as e:
+        return None, f"Quotable 오류: {type(e).__name__}"
+
+
+def get_advice_tip() -> Tuple[Optional[Dict[str, str]], Optional[str]]:
+    """
+    Advice Slip 오늘의 팁
+    - 실패 시 (None, error_message)
+    - timeout=10
+    """
+    url = "https://api.adviceslip.com/advice"
+    try:
+        r = requests.get(
+            url,
+            timeout=10,
+            headers={"Accept": "application/json", "User-Agent": "habit-tracker/1.0"},
+        )
+        if r.status_code == 429:
+            return None, "Advice Slip 호출 제한(429): 잠시 후 다시 시도해줘요."
+        if r.status_code >= 500:
+            return None, f"Advice Slip 서버 오류({r.status_code})가 발생했어요."
+        r.raise_for_status()
+        data = r.json()
+        slip = data.get("slip") or {}
+        advice = slip.get("advice")
+        if not advice:
+            return None, "Advice Slip 응답에 팁이 없어요."
+        return {"advice": advice}, None
+    except requests.Timeout:
+        return None, "Advice Slip 요청 시간이 초과됐어요(timeout=10)."
+    except Exception as e:
+        return None, f"Advice Slip 오류: {type(e).__name__}"
+
+
 def generate_report(
     openai_api_key: str,
     coach_style: str,
@@ -231,6 +302,7 @@ def generate_report(
     mood: int,
     weather: Optional[Dict[str, Any]],
     dog_breed: Optional[str],
+    extra_sources: Dict[str, Optional[Dict[str, str]]],
 ) -> Tuple[Optional[str], Optional[str]]:
     """
     OpenAI로 리포트 생성
@@ -252,6 +324,29 @@ def generate_report(
 
     dog_text = dog_breed or "알 수 없음"
 
+    extra_lines: List[str] = []
+    if extra_sources:
+        for key, label in API_SOURCES:
+            if key not in extra_sources:
+                continue
+            payload = extra_sources.get(key)
+            if key == "quote":
+                if payload:
+                    extra_lines.append(
+                        f"- {label}: \"{payload.get('content')}\" — {payload.get('author') or '알 수 없음'}"
+                    )
+                else:
+                    extra_lines.append(f"- {label}: 정보 없음")
+            elif key == "tip":
+                if payload:
+                    extra_lines.append(f"- {label}: {payload.get('advice')}")
+                else:
+                    extra_lines.append(f"- {label}: 정보 없음")
+    if not extra_lines:
+        extra_lines.append("- 선택된 외부 API 없음")
+
+    extra_text = "\n".join(extra_lines)
+
     user_payload = f"""
 [오늘 체크인 요약]
 - 달성 습관: {", ".join(achieved) if achieved else "없음"}
@@ -259,6 +354,8 @@ def generate_report(
 - 기분(1~10): {mood}
 - 날씨: {weather_text}
 - 오늘의 강아지 품종: {dog_text}
+- 외부 API 데이터:
+{extra_text}
 
 [요청 출력 형식]
 아래 5개 항목을 반드시 같은 순서로 출력해줘. 각 항목은 한 줄 제목으로 시작하고, 그 아래에 2~5줄로 내용 작성.
@@ -310,6 +407,7 @@ def _seed_demo_data_if_needed() -> None:
             "mood": mood,
             "city": "Seoul",
             "coach_style": "따뜻한 멘토",
+            "api_sources": DEFAULT_API_SOURCE_KEYS,
         }
 
     demo[str(today)] = {
@@ -318,6 +416,7 @@ def _seed_demo_data_if_needed() -> None:
         "mood": 5,
         "city": "Seoul",
         "coach_style": "따뜻한 멘토",
+        "api_sources": DEFAULT_API_SOURCE_KEYS,
     }
 
     st.session_state.records = demo
@@ -363,6 +462,7 @@ if selected_date_clicked:
             "mood": 5,
             "city": "Seoul",
             "coach_style": "따뜻한 멘토",
+            "api_sources": DEFAULT_API_SOURCE_KEYS,
         }
     st.rerun()
 
@@ -381,6 +481,7 @@ current_habits = (current.get("habits") or {k: False for k in HABIT_KEYS}).copy(
 current_mood = int(current.get("mood") or 5)
 current_city = current.get("city") or "Seoul"
 current_style = current.get("coach_style") or "따뜻한 멘토"
+current_api_sources = current.get("api_sources") or DEFAULT_API_SOURCE_KEYS
 
 with left:
     st.markdown("**습관 추가**")
@@ -436,6 +537,14 @@ with left:
             key="coach_style_radio",
         )
 
+    selected_api_labels = st.multiselect(
+        "🔌 리포트에 포함할 외부 API",
+        [label for _, label in API_SOURCES],
+        default=[API_SOURCE_LABELS[key] for key in current_api_sources if key in API_SOURCE_LABELS],
+        help="리포트에 넣을 데이터를 선택하세요. (선택하지 않아도 리포트는 생성됩니다.)",
+    )
+    selected_api_keys = [key for key, label in API_SOURCES if label in selected_api_labels]
+
     save_btn = st.button("💾 오늘 기록 저장", use_container_width=True)
 
     if save_btn:
@@ -445,6 +554,7 @@ with left:
             "mood": mood,
             "city": city,
             "coach_style": coach_style,
+            "api_sources": selected_api_keys,
         }
         st.success("체크인이 저장됐어요!")
 
@@ -597,6 +707,8 @@ gen_btn = st.button("🚀 컨디션 리포트 생성", type="primary", use_conta
 
 if gen_btn:
     st.session_state.last_error = None
+    st.session_state.last_errors = {}
+    st.session_state.last_selected_sources = []
 
     # ✅ 버튼 누른 순간의 최신 UI값을 레코드에 '자동 반영'
     # (사용자가 저장 버튼을 안 눌렀어도, 생성 버튼으로 바로 리포트 만들 수 있게)
@@ -606,6 +718,7 @@ if gen_btn:
         "mood": mood,
         "city": city,
         "coach_style": coach_style,
+        "api_sources": selected_api_keys,
     }
 
     rec = st.session_state.records[selected_key]
@@ -613,11 +726,26 @@ if gen_btn:
     mood_now = int(rec["mood"])
     city_now = rec["city"]
     style_now = rec["coach_style"]
+    api_sources_now = rec.get("api_sources") or []
+    st.session_state.last_selected_sources = api_sources_now
 
     with st.spinner("날씨/강아지 데이터를 불러오고 리포트를 생성하는 중..."):
         weather, weather_err = get_weather(city_now, owm_key)
         dog, dog_err = get_dog_image()
         dog_url, dog_breed = (dog if dog else (None, None))
+        extras_payload: Dict[str, Optional[Dict[str, str]]] = {}
+        extras_errors: Dict[str, str] = {}
+
+        if "quote" in api_sources_now:
+            quote, quote_err = get_quotable_quote()
+            extras_payload["quote"] = quote
+            if quote_err:
+                extras_errors["quote"] = quote_err
+        if "tip" in api_sources_now:
+            tip, tip_err = get_advice_tip()
+            extras_payload["tip"] = tip
+            if tip_err:
+                extras_errors["tip"] = tip_err
 
         report, report_err = generate_report(
             openai_api_key=openai_key,
@@ -626,29 +754,47 @@ if gen_btn:
             mood=mood_now,
             weather=weather,         # ✅ weather None이어도 리포트는 생성 가능
             dog_breed=dog_breed,
+            extra_sources=extras_payload,
         )
 
     st.session_state.last_weather = weather
     st.session_state.last_dog = {"url": dog_url, "breed": dog_breed}
+    st.session_state.last_extras = extras_payload
     st.session_state.last_report = report
 
     # 에러 메시지 모아서 표시(키 자체는 절대 출력하지 않음)
-    errs = []
+    errs = {}
     if weather_err:
-        errs.append(f"날씨: {weather_err}")
+        errs["weather"] = weather_err
     if dog_err:
-        errs.append(f"강아지: {dog_err}")
+        errs["dog"] = dog_err
+    errs.update(extras_errors)
     if report_err:
-        errs.append(f"리포트: {report_err}")
-    st.session_state.last_error = "\n".join(errs) if errs else None
+        errs["report"] = report_err
+    st.session_state.last_errors = errs
+    st.session_state.last_error = "\n".join(errs.values()) if errs else None
 
 # Display last fetched
 weather = st.session_state.last_weather
 dog_info = st.session_state.last_dog or {}
 report = st.session_state.last_report
 last_error = st.session_state.last_error
+extras_info = st.session_state.last_extras or {}
+selected_sources = st.session_state.last_selected_sources or []
 
-if last_error:
+last_errors = st.session_state.last_errors or {}
+if last_errors:
+    error_label_map = {
+        "weather": "날씨",
+        "dog": "강아지",
+        "quote": API_SOURCE_LABELS.get("quote", "명언"),
+        "tip": API_SOURCE_LABELS.get("tip", "오늘의 팁"),
+        "report": "리포트",
+    }
+    for key, message in last_errors.items():
+        label = error_label_map.get(key, key)
+        st.error(f"{label}: {message}")
+elif last_error:
     st.error(last_error)
 
 card1, card2 = st.columns(2, vertical_alignment="top")
@@ -674,6 +820,28 @@ with card2:
     else:
         st.warning("강아지 이미지를 가져오지 못했어요. (Dog CEO/네트워크를 확인해주세요.)")
 
+extra_col1, extra_col2 = st.columns(2, vertical_alignment="top")
+
+with extra_col1:
+    st.markdown("#### 💬 오늘의 명언")
+    quote = extras_info.get("quote")
+    if quote:
+        st.info(f"“{quote.get('content')}”\n\n- {quote.get('author') or '알 수 없음'}")
+    elif "quote" not in selected_sources:
+        st.caption("선택하지 않은 API예요.")
+    else:
+        st.caption("선택하지 않았거나 데이터를 가져오지 못했어요.")
+
+with extra_col2:
+    st.markdown("#### 🧩 오늘의 팁")
+    tip = extras_info.get("tip")
+    if tip:
+        st.info(tip.get("advice") or "정보 없음")
+    elif "tip" not in selected_sources:
+        st.caption("선택하지 않은 API예요.")
+    else:
+        st.caption("선택하지 않았거나 데이터를 가져오지 못했어요.")
+
 st.markdown("#### 📝 AI 리포트")
 if report:
     st.write(report)
@@ -695,6 +863,13 @@ weather_line = "정보 없음"
 if weather:
     weather_line = f"{weather.get('desc')}, {weather.get('temp')}°C"
 
+quote_line = "정보 없음"
+tip_line = "정보 없음"
+if extras_info.get("quote"):
+    quote_line = f"{extras_info['quote'].get('content')} — {extras_info['quote'].get('author') or '알 수 없음'}"
+if extras_info.get("tip"):
+    tip_line = extras_info["tip"].get("advice") or "정보 없음"
+
 share = f"""[AI 습관 트래커 - 오늘 체크인]
 - 날짜: {selected_key}
 - 도시: {city_today}
@@ -704,6 +879,8 @@ share = f"""[AI 습관 트래커 - 오늘 체크인]
 - 기분: {mood_today}/10
 - 날씨: {weather_line}
 - 강아지: {dog_info.get('breed') or "정보 없음"}
+- 명언: {quote_line}
+- 오늘의 팁: {tip_line}
 
 [AI 리포트]
 {report or "(리포트 미생성)"}"""
@@ -730,7 +907,11 @@ with st.expander("ℹ️ API 안내 / 설정 팁"):
 - 키 없이 사용 가능합니다.
 - 실패 시에도 앱은 계속 동작하고, 에러는 화면에 표시됩니다.
 
-**4) 네트워크/요금제/제한**
+**4) Quotable / Advice Slip API**
+- 키 없이 사용 가능합니다.
+- 체크인 화면의 "외부 API" 선택에서 리포트 포함 여부를 선택할 수 있어요.
+
+**5) 네트워크/요금제/제한**
 - 401: 키 오류/비활성
 - 404: 도시명 오류
 - 429: 호출 제한
