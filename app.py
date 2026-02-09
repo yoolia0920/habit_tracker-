@@ -5,6 +5,7 @@ from typing import Dict, Any, Optional, Tuple, List
 import pandas as pd
 import requests
 import streamlit as st
+import altair as alt
 from openai import OpenAI
 
 # =========================
@@ -371,6 +372,102 @@ with right:
     df["date"] = pd.to_datetime(df["date"])
     df = df.set_index("date")
     st.bar_chart(df["achievement_pct"], height=220)
+
+# =========================
+# Analytics: 전체 기록 기반 지표/차트
+# =========================
+st.divider()
+st.subheader("📊 전체 기록 분석")
+
+records_rows: List[Dict[str, Any]] = []
+for date_key, rec in st.session_state.records.items():
+    habits = rec.get("habits") or {k: False for k in HABIT_KEYS}
+    achieved_count = sum(1 for v in habits.values() if v)
+    records_rows.append(
+        {
+            "date": pd.to_datetime(date_key),
+            "achieved_count": achieved_count,
+            "achievement_rate": achieved_count / len(HABIT_KEYS),
+        }
+    )
+
+records_df = pd.DataFrame(records_rows).sort_values("date")
+if not records_df.empty:
+    records_df["day_index"] = range(1, len(records_df) + 1)
+    records_df["cumulative_achieved"] = records_df["achieved_count"].cumsum()
+    records_df["cumulative_rate"] = records_df["cumulative_achieved"] / (
+        len(HABIT_KEYS) * records_df["day_index"]
+    )
+    records_df["is_full_success"] = records_df["achieved_count"] == len(HABIT_KEYS)
+
+    date_range = pd.date_range(records_df["date"].min(), records_df["date"].max(), freq="D")
+    success_full = (
+        records_df.set_index("date")["is_full_success"]
+        .reindex(date_range, fill_value=False)
+        .astype(bool)
+    )
+
+    longest_streak = 0
+    running = 0
+    for success in success_full:
+        if success:
+            running += 1
+            longest_streak = max(longest_streak, running)
+        else:
+            running = 0
+
+    current_streak = 0
+    for success in reversed(success_full.tolist()):
+        if success:
+            current_streak += 1
+        else:
+            break
+
+    records_df["month"] = records_df["date"].dt.to_period("M").dt.to_timestamp()
+    monthly_avg = records_df.groupby("month")["achievement_rate"].mean()
+    latest_month = monthly_avg.index.max()
+    latest_month_avg = monthly_avg.loc[latest_month] if latest_month is not None else 0.0
+
+    summary1, summary2, summary3, summary4, summary5 = st.columns(5)
+    summary1.metric("누적 달성 횟수", f"{records_df['cumulative_achieved'].iloc[-1]}회")
+    summary2.metric("누적 달성률", f"{records_df['cumulative_rate'].iloc[-1] * 100:.1f}%")
+    summary3.metric("가장 긴 연속 달성일", f"{longest_streak}일")
+    summary4.metric("현재 스트릭", f"{current_streak}일")
+    summary5.metric("이번 달 평균 달성률", f"{latest_month_avg * 100:.1f}%")
+
+    st.markdown("**📈 누적 달성률 추이**")
+    cumulative_chart = records_df.set_index("date")["cumulative_rate"] * 100
+    st.line_chart(cumulative_chart, height=240)
+
+    st.markdown("**🗓️ 월별 달성 히트맵**")
+    heatmap_df = records_df.copy()
+    heatmap_df["month_label"] = heatmap_df["date"].dt.strftime("%Y-%m")
+    heatmap_df["day"] = heatmap_df["date"].dt.day
+    heatmap_df["achievement_pct"] = heatmap_df["achievement_rate"] * 100
+
+    heatmap = (
+        alt.Chart(heatmap_df)
+        .mark_rect()
+        .encode(
+            x=alt.X("day:O", title="일"),
+            y=alt.Y("month_label:O", title="월"),
+            color=alt.Color(
+                "achievement_pct:Q",
+                title="달성률(%)",
+                scale=alt.Scale(scheme="greens"),
+            ),
+            tooltip=[
+                alt.Tooltip("date:T", title="날짜"),
+                alt.Tooltip("achievement_pct:Q", title="달성률(%)", format=".1f"),
+                alt.Tooltip("achieved_count:Q", title="달성 습관 수"),
+            ],
+        )
+        .properties(height=220)
+    )
+    st.altair_chart(heatmap, use_container_width=True)
+    st.caption("※ 달성일은 하루 모든 습관을 체크한 날로 계산합니다.")
+else:
+    st.info("전체 기록 분석을 위해 최소 1일의 체크인이 필요해요.")
 
 # =========================
 # Results: Weather + Dog + AI Report
