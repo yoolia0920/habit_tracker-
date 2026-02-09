@@ -6,6 +6,7 @@ import pandas as pd
 import requests
 import streamlit as st
 import altair as alt
+import certifi
 from openai import OpenAI
 from streamlit_calendar import calendar
 
